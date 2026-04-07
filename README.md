@@ -42,18 +42,30 @@ If anything fails the safety check, it stops and tells you exactly which conditi
 
 ---
 
+## Getting Started
+
+### Step 1 — Paste the one-shot prompt into Claude Code
+
+Copy the entire contents of [`prompts/02-one-shot-trade.md`](prompts/02-one-shot-trade.md) and paste it into your Claude Code terminal.
+
+That's it. Claude acts as your onboarding agent — it clones the repo, walks you through connecting BitGet, sets your trading preferences, connects TradingView, optionally builds a strategy from a YouTube channel, deploys to Railway, and runs the bot for the first time. Every step is interactive. It pauses when it needs something from you and handles everything else automatically.
+
+---
+
 ## What's Happening Under the Hood
+
+For anyone who wants to understand the steps manually, or troubleshoot a specific part:
 
 ### Prerequisites
 
-- **TradingView MCP** must already be set up — that's the connection built in the [first video](https://youtu.be/vIX6ztULs4U). If you haven't done that yet, watch it first and come back.
+- **TradingView MCP** must already be set up — built in the [first video](https://youtu.be/vIX6ztULs4U)
 - **Claude Code** installed and running
 - **A BitGet account** — [sign up here](https://partner.bitget.com/bg/LewisJackson) for a $1,000 bonus on your first deposit
 - **Node.js 18+** — check with `node --version`
 
 ---
 
-### Step 1 — Clone this repo
+### Clone the repo
 
 **Mac / Linux:**
 ```bash
@@ -61,29 +73,27 @@ git clone https://github.com/jackson-video-resources/claude-tradingview-mcp-trad
 cd claude-tradingview-mcp-trading
 ```
 
-**Windows (PowerShell):**
+**Windows:**
 ```powershell
 git clone https://github.com/jackson-video-resources/claude-tradingview-mcp-trading
 cd claude-tradingview-mcp-trading
 ```
 
-> No git? Install it from [git-scm.com](https://git-scm.com) — same command works after.
-
 ---
 
-### Step 2 — Add your BitGet API credentials
+### Add your BitGet API credentials
 
 **Mac / Linux:**
 ```bash
 cp .env.example .env
 ```
 
-**Windows (PowerShell):**
+**Windows:**
 ```powershell
 Copy-Item .env.example .env
 ```
 
-Open `.env` and fill in your credentials:
+Open `.env` and fill in:
 
 ```
 BITGET_API_KEY=your_api_key_here
@@ -99,11 +109,11 @@ MAX_TRADES_PER_DAY=3
 - Name it something like `claude-trading`
 - **Withdrawals: OFF** — always, no exceptions
 - **IP whitelist: ON** — add your IP (Google "what is my IP" if unsure)
-- Copy the key, secret key, and passphrase — the passphrase can't be recovered once you leave the page
+- Write down your passphrase immediately — it can't be recovered after you leave the page
 
 ---
 
-### Step 3 — Launch TradingView and connect the MCP
+### Launch TradingView and connect the MCP
 
 **Mac:**
 ```bash
@@ -111,44 +121,19 @@ tv_launch
 tv_health_check
 ```
 
-**Windows:**
+**Windows:** See [docs/setup-windows.md](docs/setup-windows.md)
 
-TradingView on Windows installs as an `.msix` package — the executable path is different. Find it with:
-```powershell
-Get-AppxPackage -Name "TradingView*" | Select-Object -ExpandProperty InstallLocation
-```
-Then launch it manually with the CDP flag:
-```powershell
-& "C:\Users\[YourName]\...\TradingView.exe" --remote-debugging-port=9222
-```
-Full walkthrough: [docs/setup-windows.md](docs/setup-windows.md)
+**Linux:** See [docs/setup-linux.md](docs/setup-linux.md)
 
-**Linux:**
-
-```bash
-# Flatpak
-flatpak run com.tradingview.TradingViewDesktop --remote-debugging-port=9222
-
-# Snap
-tradingview --remote-debugging-port=9222
-```
-Full walkthrough: [docs/setup-linux.md](docs/setup-linux.md)
-
-Once TradingView is running, verify the connection:
-```bash
-tv_health_check
-```
-Should return `cdp_connected: true`. If not — TradingView wasn't launched with the CDP flag. Close it completely and relaunch using the command above.
-
-Set your chart to: BTCUSDT (or your preferred symbol), 4H timeframe, strategy indicator + RSI 14 visible.
+Verify with `tv_health_check` — should return `cdp_connected: true`.
 
 ---
 
-### Step 4 — Run the one-shot prompt
+### Run the bot manually
 
-Open Claude Code in the project directory and paste the full contents of [`prompts/02-one-shot-trade.md`](prompts/02-one-shot-trade.md).
-
-Claude takes it from there — it walks you through every remaining step interactively.
+```bash
+node bot.js
+```
 
 ---
 
