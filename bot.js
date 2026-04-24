@@ -37,7 +37,8 @@ function checkOnboarding() {
         "MAX_TRADE_SIZE_USD=100",
         "MAX_TRADES_PER_DAY=3",
         "PAPER_TRADING=true",
-        "SYMBOL=BTCUSDT",
+        "# Comma-separated symbols to scan",
+        "SYMBOL=BTCUSDT,ETHUSDT,SOLUSDT",
         "TIMEFRAME=4H",
       ].join("\n") + "\n",
     );
@@ -71,8 +72,15 @@ function checkOnboarding() {
 
 // ─── Config ────────────────────────────────────────────────────────────────
 
+function parseSymbols(symbolStr) {
+  return symbolStr
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
 const CONFIG = {
-  symbol: process.env.SYMBOL || "BTCUSDT",
+  symbols: parseSymbols(process.env.SYMBOL || "BTCUSDT"),
   timeframe: process.env.TIMEFRAME || "4H",
   portfolioValue: parseFloat(process.env.PORTFOLIO_VALUE_USD || "1000"),
   maxTradeSizeUSD: parseFloat(process.env.MAX_TRADE_SIZE_USD || "100"),
@@ -493,6 +501,107 @@ function generateTaxSummary() {
 
 // ─── Main ────────────────────────────────────────────────────────────────────
 
+async function scanSymbol(symbol, rules, log) {
+  // Fetch candle data — need enough for EMA(8) + full session for VWAP
+  console.log(`\n── Scanning ${symbol} ───────────────────────────────────────────\n`);
+  try {
+    const candles = await fetchCandles(symbol, CONFIG.timeframe, 500);
+    const closes = candles.map((c) => c.close);
+    const price = closes[closes.length - 1];
+    console.log(`  Current price: $${price.toFixed(2)}`);
+
+    // Calculate indicators
+    const ema8 = calcEMA(closes, 8);
+    const vwap = calcVWAP(candles);
+    const rsi3 = calcRSI(closes, 3);
+
+    console.log(`  EMA(8):  $${ema8.toFixed(2)}`);
+    console.log(`  VWAP:    ${vwap ? vwap.toFixed(2) : "N/A"}`);
+    console.log(`  RSI(3):  ${rsi3 ? rsi3.toFixed(2) : "N/A"}`);
+
+    if (!vwap || !rsi3) {
+      console.log(`  ⚠️  Not enough data to calculate indicators.`);
+      return;
+    }
+
+    // Run safety check
+    const { results, allPass } = runSafetyCheck(price, ema8, vwap, rsi3, rules);
+
+    // Calculate position size
+    const tradeSize = Math.min(
+      CONFIG.portfolioValue * 0.01,
+      CONFIG.maxTradeSizeUSD,
+    );
+
+    // Decision
+    console.log("\n── Decision ─────────────────────────────────────────────\n");
+
+    const logEntry = {
+      timestamp: new Date().toISOString(),
+      symbol,
+      timeframe: CONFIG.timeframe,
+      price,
+      indicators: { ema8, vwap, rsi3 },
+      conditions: results,
+      allPass,
+      tradeSize,
+      orderPlaced: false,
+      orderId: null,
+      paperTrading: CONFIG.paperTrading,
+      limits: {
+        maxTradeSizeUSD: CONFIG.maxTradeSizeUSD,
+        maxTradesPerDay: CONFIG.maxTradesPerDay,
+        tradesToday: countTodaysTrades(log),
+      },
+    };
+
+    if (!allPass) {
+      const failed = results.filter((r) => !r.pass).map((r) => r.label);
+      console.log(`🚫 TRADE BLOCKED`);
+      console.log(`   Failed conditions:`);
+      failed.forEach((f) => console.log(`   - ${f}`));
+    } else {
+      console.log(`✅ ALL CONDITIONS MET`);
+
+      if (CONFIG.paperTrading) {
+        console.log(
+          `\n📋 PAPER TRADE — would buy ${symbol} ~$${tradeSize.toFixed(2)} at market`,
+        );
+        logEntry.orderPlaced = true;
+        logEntry.orderId = `PAPER-${Date.now()}`;
+      } else {
+        console.log(
+          `\n🔴 PLACING LIVE ORDER — $${tradeSize.toFixed(2)} BUY ${symbol}`,
+        );
+        try {
+          const order = await placeBitGetOrder(
+            symbol,
+            "buy",
+            tradeSize,
+            price,
+          );
+          logEntry.orderPlaced = true;
+          logEntry.orderId = order.orderId;
+          console.log(`✅ ORDER PLACED — ${order.orderId}`);
+        } catch (err) {
+          console.log(`❌ ORDER FAILED — ${err.message}`);
+          logEntry.error = err.message;
+        }
+      }
+    }
+
+    // Save decision log
+    log.trades.push(logEntry);
+    saveLog(log);
+    writeTradeCsv(logEntry);
+  } catch (err) {
+    console.log(`❌ Error scanning ${symbol}: ${err.message}`);
+  }
+
+  // Rate limit: small delay between symbol scans
+  await new Promise((resolve) => setTimeout(resolve, 500));
+}
+
 async function run() {
   checkOnboarding();
   initCsv();
@@ -506,8 +615,8 @@ async function run() {
 
   // Load strategy
   const rules = JSON.parse(readFileSync("rules.json", "utf8"));
-  console.log(`\nStrategy: ${rules.strategy.name}`);
-  console.log(`Symbol: ${CONFIG.symbol} | Timeframe: ${CONFIG.timeframe}`);
+  console.log(`\nStrategy: ${rules.context?.framework ?? rules.trading_mode ?? "Custom"}`);
+  console.log(`Symbols: ${CONFIG.symbols.join(", ")} | Timeframe: ${CONFIG.timeframe}`);
 
   // Load log and check daily limits
   const log = loadLog();
@@ -517,101 +626,13 @@ async function run() {
     return;
   }
 
-  // Fetch candle data — need enough for EMA(8) + full session for VWAP
-  console.log("\n── Fetching market data from Binance ───────────────────\n");
-  const candles = await fetchCandles(CONFIG.symbol, CONFIG.timeframe, 500);
-  const closes = candles.map((c) => c.close);
-  const price = closes[closes.length - 1];
-  console.log(`  Current price: $${price.toFixed(2)}`);
+  // Fetch market data — need enough for EMA(8) + full session for VWAP
+  console.log("\n── Fetching market data from Binance ───────────────────");
 
-  // Calculate indicators
-  const ema8 = calcEMA(closes, 8);
-  const vwap = calcVWAP(candles);
-  const rsi3 = calcRSI(closes, 3);
-
-  console.log(`  EMA(8):  $${ema8.toFixed(2)}`);
-  console.log(`  VWAP:    $${vwap ? vwap.toFixed(2) : "N/A"}`);
-  console.log(`  RSI(3):  ${rsi3 ? rsi3.toFixed(2) : "N/A"}`);
-
-  if (!vwap || !rsi3) {
-    console.log("\n⚠️  Not enough data to calculate indicators. Exiting.");
-    return;
+  // Scan each symbol
+  for (const symbol of CONFIG.symbols) {
+    await scanSymbol(symbol, rules, log);
   }
-
-  // Run safety check
-  const { results, allPass } = runSafetyCheck(price, ema8, vwap, rsi3, rules);
-
-  // Calculate position size
-  const tradeSize = Math.min(
-    CONFIG.portfolioValue * 0.01,
-    CONFIG.maxTradeSizeUSD,
-  );
-
-  // Decision
-  console.log("\n── Decision ─────────────────────────────────────────────\n");
-
-  const logEntry = {
-    timestamp: new Date().toISOString(),
-    symbol: CONFIG.symbol,
-    timeframe: CONFIG.timeframe,
-    price,
-    indicators: { ema8, vwap, rsi3 },
-    conditions: results,
-    allPass,
-    tradeSize,
-    orderPlaced: false,
-    orderId: null,
-    paperTrading: CONFIG.paperTrading,
-    limits: {
-      maxTradeSizeUSD: CONFIG.maxTradeSizeUSD,
-      maxTradesPerDay: CONFIG.maxTradesPerDay,
-      tradesToday: countTodaysTrades(log),
-    },
-  };
-
-  if (!allPass) {
-    const failed = results.filter((r) => !r.pass).map((r) => r.label);
-    console.log(`🚫 TRADE BLOCKED`);
-    console.log(`   Failed conditions:`);
-    failed.forEach((f) => console.log(`   - ${f}`));
-  } else {
-    console.log(`✅ ALL CONDITIONS MET`);
-
-    if (CONFIG.paperTrading) {
-      console.log(
-        `\n📋 PAPER TRADE — would buy ${CONFIG.symbol} ~$${tradeSize.toFixed(2)} at market`,
-      );
-      console.log(`   (Set PAPER_TRADING=false in .env to place real orders)`);
-      logEntry.orderPlaced = true;
-      logEntry.orderId = `PAPER-${Date.now()}`;
-    } else {
-      console.log(
-        `\n🔴 PLACING LIVE ORDER — $${tradeSize.toFixed(2)} BUY ${CONFIG.symbol}`,
-      );
-      try {
-        const order = await placeBitGetOrder(
-          CONFIG.symbol,
-          "buy",
-          tradeSize,
-          price,
-        );
-        logEntry.orderPlaced = true;
-        logEntry.orderId = order.orderId;
-        console.log(`✅ ORDER PLACED — ${order.orderId}`);
-      } catch (err) {
-        console.log(`❌ ORDER FAILED — ${err.message}`);
-        logEntry.error = err.message;
-      }
-    }
-  }
-
-  // Save decision log
-  log.trades.push(logEntry);
-  saveLog(log);
-  console.log(`\nDecision log saved → ${LOG_FILE}`);
-
-  // Write tax CSV row for every run (executed, paper, or blocked)
-  writeTradeCsv(logEntry);
 
   console.log("═══════════════════════════════════════════════════════════\n");
 }
