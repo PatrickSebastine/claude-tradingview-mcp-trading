@@ -20,7 +20,12 @@ function checkOnboarding() {
   const required = ["BITGET_API_KEY", "BITGET_SECRET_KEY", "BITGET_PASSPHRASE"];
   const missing = required.filter((k) => !process.env[k]);
 
-  if (!existsSync(".env")) {
+  // In cloud environments (Railway, etc.) there is no .env file —
+  // credentials are injected as environment variables directly.
+  // Only run the local file-based setup flow when NOT in a cloud environment.
+  const isCloud = !!process.env.RAILWAY_ENVIRONMENT || !!process.env.RAILWAY_PROJECT_ID;
+
+  if (!isCloud && !existsSync(".env")) {
     console.log(
       "\n⚠️  No .env file found — opening it for you to fill in...\n",
     );
@@ -52,12 +57,14 @@ function checkOnboarding() {
   }
 
   if (missing.length > 0) {
-    console.log(`\n⚠️  Missing credentials in .env: ${missing.join(", ")}`);
-    console.log("Opening .env for you now...\n");
-    try {
-      execSync("open .env");
-    } catch {}
-    console.log("Add the missing values then re-run: node bot.js\n");
+    console.log(`\n⚠️  Missing credentials: ${missing.join(", ")}`);
+    if (isCloud) {
+      console.log("Set these in Railway → Variables tab, then redeploy.\n");
+    } else {
+      console.log("Opening .env for you now...\n");
+      try { execSync("open .env"); } catch {}
+      console.log("Add the missing values then re-run: node bot.js\n");
+    }
     process.exit(0);
   }
 
